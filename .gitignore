@@ -45,3 +45,4 @@ pip-wheel-metadata/
 
 ## data
 *.csv
+*.pkl
