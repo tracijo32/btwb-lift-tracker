@@ -168,30 +168,77 @@ def run_strength_filter(
     df["rate_estimate"] = rate_means
     df["rate_sd"] = np.sqrt(np.asarray(rate_vars, dtype=float))
 
-    return df
+    ## report just the filtered columns by date
+    df = df.reindex(columns=['date','strength_estimate','strength_sd','rate_estimate','rate_sd'])
 
-def forecast_strength(filtered_df: pd.DataFrame, days: int = 180) -> pd.DataFrame:
+    return df, x, P
 
-    df = _validate_data_frame(filtered_df,
-        dtypes = {
-            'date': 'datetime64[ns]',
-            'strength_estimate': 'float64',
-            'rate_estimate': 'float64',
-        }
-    )
-    last = df.sort_values(by='date').iloc[-1]
+def forecast_strength_with_uncertainty(
+    last_date: pd.Timestamp,
+    last_state: np.ndarray,
+    last_cov: np.ndarray,
+    days: int = 180,
+    strength_process_var: float = 0.25,
+    rate_process_var: float = 1e-4,
+) -> pd.DataFrame:
+    """
+    Forecast latent strength and uncertainty forward from the last filtered state.
 
-    last_date = pd.to_datetime(last["date"])
-    strength = float(last["strength_estimate"])
-    rate = float(last["rate_estimate"])
+    Parameters
+    ----------
+    last_date : pd.Timestamp
+        Date of the last observation.
+    last_state : np.ndarray
+        Final filtered state, shape (2,)
+        [strength, daily_rate]
+    last_cov : np.ndarray
+        Final filtered covariance, shape (2, 2)
+    days : int
+        Number of days to forecast
+    strength_process_var : float
+        Process variance for strength
+    rate_process_var : float
+        Process variance for rate
 
-    future_days = np.arange(1, days + 1, dtype=float)
-    future_dates = last_date + pd.to_timedelta(future_days, unit="D")
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+        - date
+        - forecast_strength
+        - forecast_sd
+        - lower_95
+        - upper_95
+    """
+    x = np.asarray(last_state, dtype=float).reshape(2)
+    P = np.asarray(last_cov, dtype=float).reshape(2, 2)
 
-    # Simple forecast: hold the last estimated rate constant
-    future_strength = strength + rate * future_days
+    rows = []
 
-    return pd.DataFrame({
-        "date": future_dates,
-        "strength_estimate": future_strength,
-    })
+    for h in range(1, days + 1):
+        dt = 1.0
+
+        A = np.array([
+            [1.0, dt],
+            [0.0, 1.0],
+        ])
+
+        Q = np.array([
+            [strength_process_var * dt, 0.0],
+            [0.0, rate_process_var * dt],
+        ])
+
+        # Predict next state and covariance
+        x = A @ x
+        P = A @ P @ A.T + Q
+
+        strength_mean = x[0]
+        strength_sd = np.sqrt(P[0, 0])
+
+        rows.append({
+            "date": last_date + pd.Timedelta(days=h),
+            "strength_estimate": strength_mean,
+            "strength_sd": strength_sd,
+        })
+
+    return pd.DataFrame(rows)
