@@ -1,0 +1,44 @@
+# User-requested: ignore Markdown + Jupyter notebooks
+*.md
+*.ipynb
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+.hypothesis/
+
+# Coverage / test reports
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.nox/
+.tox/
+
+# Environments
+.env
+.venv/
+venv/
+ENV/
+env/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
