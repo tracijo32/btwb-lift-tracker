@@ -117,7 +117,12 @@ def get_squats_for_forecast(
     if squats_to_include is not None:
         df = df[df['squat'].isin(squats_to_include)]
 
-    return df.reindex(columns=['date','squat','variation','repetitions','weight_lbs','bs_1rm_est'])
+    ## if there are any dates with multiple observations,
+    ## take the max estimated 1RM back squat equivalent lifted for that date
+    df = df.loc[df.groupby('date')['bs_1rm_est'].idxmax()]\
+        .reindex(columns=['date','squat','variation','repetitions','weight_lbs','bs_1rm_est'])
+
+    return df
 
 def compute_variance_by_squat(
     strength_curve: pd.DataFrame,
