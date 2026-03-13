@@ -97,8 +97,13 @@ def process_squats(path_to_files: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.
         days=180
     )
 
+    ## combine the filter and forecast dataframes
+    model_df = pd.concat([filtered_df, forecast_df])\
+        .reindex(columns=['date','strength_estimate','strength_sd'])\
+            .sort_values('date')
+
     ## save the forecast to pickle
-    return squat_df, filtered_df, forecast_df
+    return squat_df, model_df
 
 if __name__ == "__main__":
     import pickle
@@ -110,7 +115,6 @@ if __name__ == "__main__":
     pickle.dump(withings_model, open("withings_model.pkl", "wb"))   
 
     path_to_btwb_data = root_dir / "btwb" / "workout-events-2"
-    squat_df, filtered_df, forecast_df = process_squats(path_to_btwb_data)
-    pickle.dump(squat_df, open("squat_data.pkl", "wb"))
-    pickle.dump(filtered_df, open("squat_filtered.pkl", "wb"))
-    pickle.dump(forecast_df, open("squat_forecast.pkl", "wb"))
+    squat_data, squat_model = process_squats(path_to_btwb_data)
+    pickle.dump(squat_data, open("squat_data.pkl", "wb"))
+    pickle.dump(squat_model, open("squat_model.pkl", "wb"))
