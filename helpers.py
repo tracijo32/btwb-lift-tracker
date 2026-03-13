@@ -99,3 +99,19 @@ def lookup_nested_obs_var(
         return float(default)
 
     return float(node)
+
+def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> str:
+    """
+    Convert '#RRGGBB' or '#RGB' (optionally without '#') to 'rgba(r,g,b,a)'.
+    """
+    s = hex_color.strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        raise ValueError(f"Expected 3 or 6 hex digits, got {hex_color!r}")
+    if not (0.0 <= alpha <= 1.0):
+        raise ValueError(f"alpha must be between 0 and 1, got {alpha}")
+    r = int(s[0:2], 16)
+    g = int(s[2:4], 16)
+    b = int(s[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
