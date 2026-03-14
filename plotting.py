@@ -549,9 +549,6 @@ if __name__ == '__main__':
     from plotly_theme import register_chunk_template
     _ = register_chunk_template(transparent=True, set_default=True)
 
-    print('creating bwbs forecast figure')
-
-
     create_bwbs_forecast_figure(withings_model, squat_model)\
         .write_html('bwbs_forecast.html')
 
