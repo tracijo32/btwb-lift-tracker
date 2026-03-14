@@ -406,8 +406,10 @@ def get_body_weight_back_squat_prediction(
     return date_met, weight_met
 
 def create_bwbs_forecast_figure(
+    withings_data_frame: pd.DataFrame,
+    squat_data_frame: pd.DataFrame,
     withings_model_frame: pd.DataFrame,
-    squat_model_frame: pd.DataFrame,
+    squat_model_frame: pd.DataFrame
 ):
 
     ## reformat the data frames to have a 'date' column and a 'weight' column
@@ -420,8 +422,8 @@ def create_bwbs_forecast_figure(
     ## separate the models into past and future:
     ## past are fitted to the data
     ## future are forecasts
-    squat_date_max = squat_data['date'].max().date()
-    withings_date_max = withings_data['date'].max().date()
+    squat_date_max = squat_data_frame['date'].max().date()
+    withings_date_max = withings_data_frame['date'].max().date()
     last_data_date = pd.to_datetime(max(squat_date_max, withings_date_max))
 
     combined_weights_past = combined_weights[combined_weights['date'].le(last_data_date)]
