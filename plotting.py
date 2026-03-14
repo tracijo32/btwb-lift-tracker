@@ -106,7 +106,7 @@ def get_withings_traces(
     ]
     return traces
 
-def create_squat_strength_figure(
+def create_withings_figure(
     withings_data_frame: pd.DataFrame,
     withings_model_frame: pd.DataFrame
 ) -> go.Figure:
@@ -270,7 +270,7 @@ def reformat_squat_model(
 
     return df
 
-def get_squat_model_error_band_traces(
+def create_squat_model_error_band_traces(
     squat_model_frame: pd.DataFrame,
     fill_color: str | None = None,
     opacity: float = 0.2,
@@ -346,7 +346,7 @@ def get_strength_plotting_traces(
         shape_indicator_color=COLORS.text
     )
     
-    error_traces = get_squat_model_error_band_traces(squat_model_frame)
+    error_traces = create_squat_model_error_band_traces(squat_model_frame)
 
     return meas_traces+error_traces
 
@@ -366,3 +366,197 @@ def create_squat_strength_figure(
         yaxis_title='One Rep Max Back Squat Equivalent (lbs)'
     )
     return fig
+
+### both withings and squat strength #####################
+def reformat_goal_frame(
+    goal_frame: pd.DataFrame,
+    weight_column_name: str = 'weight'
+):
+    g = goal_frame.copy()
+    g['date'] = pd.to_datetime(g['date'].dt.date)
+
+    assert weight_column_name in g.columns, \
+        f"weight_column_name {weight_column_name} not in {g.columns}"
+    g = g.rename(columns={weight_column_name:'weight'})\
+        .groupby('date')['weight'].mean().reset_index()
+
+    return g
+
+def get_body_weight_back_squat_prediction(
+    combined_weight_frame: pd.DataFrame,
+):
+
+    df = _validate_data_frame(
+        combined_weight_frame,
+        dtypes = {
+        'date': 'datetime64[ns]',
+        'weight_body': 'float64',
+        'weight_squat': 'float64',
+        }
+    )
+    goal_met = df['weight_squat'].ge(df['weight_body'])
+
+    if goal_met.sum() == 0:
+        last_date = df['date'].max()
+        return last_date, None
+
+    instance_met = df.loc[df.loc[goal_met, 'date'].idxmin()]
+    date_met = instance_met['date']
+    weight_met = instance_met[['weight_squat', 'weight_body']].mean()
+    return date_met, weight_met
+
+def create_bwbs_forecast_figure(
+    withings_model_frame: pd.DataFrame,
+    squat_model_frame: pd.DataFrame,
+):
+
+    ## reformat the data frames to have a 'date' column and a 'weight' column
+    ## then merge them together on date. all of the forecasts are sampled daily,
+    ## so the dates will be the same.
+    b = reformat_goal_frame(withings_model_frame, 'total')
+    s = reformat_goal_frame(squat_model_frame, 'strength_estimate')
+    combined_weights = pd.merge(b, s, on='date',suffixes=('_body', '_squat'))
+
+    ## separate the models into past and future:
+    ## past are fitted to the data
+    ## future are forecasts
+    squat_date_max = squat_data['date'].max().date()
+    withings_date_max = withings_data['date'].max().date()
+    last_data_date = pd.to_datetime(max(squat_date_max, withings_date_max))
+
+    combined_weights_past = combined_weights[combined_weights['date'].le(last_data_date)]
+    combined_weights_future = combined_weights[combined_weights['date'].gt(last_data_date)]
+
+    ## plot the data as lines
+    ## body weight is dark blue, back squat is green
+    ## fits are solid, forecasts are dashed
+    traces = [
+        go.Scatter(
+            x=combined_weights_past['date'],
+            y=combined_weights_past['weight_body'],
+            mode='lines',
+            line=dict(color=COLORS.dark_blue),
+            name='body weight (K-H ES fit)',
+        ),
+        go.Scatter(
+            x=combined_weights_past['date'],
+            y=combined_weights_past['weight_squat'],
+            mode='lines',
+            line=dict(color=COLORS.green),
+            name='back squat (Kalman filter)',
+        ),
+            go.Scatter(
+            x=combined_weights_future['date'],
+            y=combined_weights_future['weight_body'],
+            mode='lines',
+            line=dict(color=COLORS.dark_blue, dash='dash'),
+            name='body weight (forecast)',
+        ),
+        go.Scatter(
+            x=combined_weights_future['date'],
+            y=combined_weights_future['weight_squat'],
+            mode='lines',
+            line=dict(color=COLORS.green, dash='dash'),
+            name='back squat (forecast)',
+        )
+    ]
+
+    ## plot the models
+    fig = go.Figure(data=traces)
+
+    ## using the forecasts for both models, find the date and weight
+    ## where the back squat first exceeds the body weight
+    ## if that never happens, then the goal is the last date of the forecast
+    ## the weight returne is None
+    goal_date, goal_weight = get_body_weight_back_squat_prediction(combined_weights_future)
+
+    ## if the goal is reached, then plot the goal as a star
+    ## the text is formatted to show the date and weight
+    if goal_weight is not None:
+        text = '<br>'.join([
+            'A body-weight back squat',
+            'is predicted to be reached',
+            f'around {goal_date.strftime("%B %d, %Y")}',
+            f'at a weight of {goal_weight:.0f} lbs.'
+        ])
+        fig.add_trace(
+            go.Scatter(
+                x=[goal_date],
+                y=[goal_weight],
+                mode='markers',
+                marker=dict(
+                    color=COLORS.brown,
+                    symbol='star',
+                    size=30
+                ),
+                name='goal',
+                showlegend=False
+            )
+        )
+        fig.add_annotation(
+            x=goal_date,
+            y=goal_weight,
+            text=text,
+            font=dict(size=12),
+            showarrow=True,
+            ax=0,
+            ay=100,
+            standoff=15,
+            arrowhead=2,
+            arrowwidth=2,
+            arrowcolor=COLORS.brown,
+        )
+    else:
+        ## if the goal is not reached, then place an annotation
+        ## saying that the goal is to occur before the last date
+        ## of the forecast
+        txt_idx = combined_weights_future['date'].idxmin()
+        x = combined_weights_future.loc[txt_idx,'date']
+        y = combined_weights_future.loc[txt_idx,['weight_body','weight_squat']].mean()
+
+        last_model_date = combined_weights_future['date'].max()
+
+        text = '<br>'.join([
+            'A body-weight back squat',
+            'is not predicted to be reached',
+            f'before {last_model_date.month_name()} {last_model_date.year}.'
+        ])
+        fig.add_annotation(x=x,y=y,text=text,showarrow=False)     
+
+    ## update all of the layout elements
+    fig.update_layout(
+        title='Body-weight back squat<br>goal tracker',
+        xaxis_title='Date',
+        yaxis_title='Weight (lb)',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1
+        )
+    )
+
+    return fig
+
+if __name__ == '__main__':
+    import pickle
+    squat_data = pickle.load(open('squat_data.pkl','rb'))
+    squat_model = pickle.load(open('squat_model.pkl','rb'))
+    withings_data = pickle.load(open('withings_data.pkl','rb'))
+    withings_model = pickle.load(open('withings_model.pkl','rb'))
+
+    from plotly_theme import register_chunk_template
+    _ = register_chunk_template(transparent=True, set_default=True)
+
+    print('creating bwbs forecast figure')
+
+
+    create_bwbs_forecast_figure(withings_model, squat_model)\
+        .write_html('bwbs_forecast.html')
+
+    create_squat_strength_figure(squat_data, squat_model)\
+        .write_html('squat_strength.html')
+
+    create_withings_figure(withings_data, withings_model)\
+        .write_html('withings.html')
