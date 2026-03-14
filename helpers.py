@@ -1,16 +1,109 @@
 from pandas import DataFrame
 from pathlib import Path
+import re
+from typing import Any, Union
 
-def load_withings_data(path_to_files: Path) -> dict:
-    import glob, json
-    files = glob.glob(str(path_to_files / 'year=????' / 'month=??.json'))
-    data = [d for f in files for d in json.load(open(f))]
+
+_MONTH_JSON_SUFFIX_RE = re.compile(r"(?:^|/)year=\d{4}/month=\d{2}\.json$")
+
+
+def _is_gs_uri(s: str) -> bool:
+    return s.startswith("gs://")
+
+
+def _parse_gs_uri(uri: str) -> tuple[str, str]:
+    """
+    Returns (bucket, blob_name_or_prefix_without_leading_slash).
+    Accepts:
+      - gs://my-bucket
+      - gs://my-bucket/some/prefix
+      - gs://my-bucket/path/to/file.json
+    """
+    if not _is_gs_uri(uri):
+        raise ValueError(f"Not a gs:// URI: {uri!r}")
+    rest = uri[len("gs://") :]
+    if not rest.strip():
+        raise ValueError(f"Invalid gs:// URI (missing bucket): {uri!r}")
+    bucket, _, blob = rest.partition("/")
+    return bucket, blob
+
+
+def _iter_month_json_objects(source: Union[str, Path]) -> list[Any]:
+    """
+    Loads and returns parsed JSON objects from:
+      - local directory containing year=####/month=##.json
+      - local file path to a .json file
+      - gs://bucket[/prefix] containing year=####/month=##.json
+      - gs://bucket/path/to/file.json
+    """
+    import json
+
+    src = str(source)
+    if _is_gs_uri(src):
+        bucket_name, blob_or_prefix = _parse_gs_uri(src)
+        try:
+            from google.cloud import storage  # type: ignore
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "Reading from GCS requires the optional dependency `google-cloud-storage`. "
+                "Install it (e.g. `pip install google-cloud-storage`) and ensure "
+                "Application Default Credentials are configured."
+            ) from e
+
+        client = storage.Client()
+
+        # If the URI points at a single JSON file, load just that object.
+        if blob_or_prefix and blob_or_prefix.lower().endswith(".json") and not blob_or_prefix.endswith("/"):
+            blob = client.bucket(bucket_name).blob(blob_or_prefix)
+            raw = blob.download_as_bytes()
+            return [json.loads(raw)]
+
+        # Otherwise treat as a prefix; list all matching month JSON blobs beneath it.
+        prefix = (blob_or_prefix or "").lstrip("/")
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+
+        blobs = list(client.list_blobs(bucket_name, prefix=prefix))
+        month_blobs = [b for b in blobs if _MONTH_JSON_SUFFIX_RE.search(getattr(b, "name", "") or "")]
+        month_blobs.sort(key=lambda b: b.name)
+
+        out: list[Any] = []
+        for b in month_blobs:
+            raw = b.download_as_bytes()
+            out.append(json.loads(raw))
+        return out
+
+    # Local path handling
+    p = Path(source)
+    if p.is_file():
+        with p.open("r", encoding="utf-8") as f:
+            return [json.load(f)]
+
+    import glob
+
+    files = sorted(glob.glob(str(p / "year=????" / "month=??.json")))
+    out: list[Any] = []
+    for fp in files:
+        with open(fp, "r", encoding="utf-8") as f:
+            out.append(json.load(f))
+    return out
+
+def load_withings_data(path_to_files: Union[str, Path]) -> list[dict[str, Any]]:
+    payloads = _iter_month_json_objects(path_to_files)
+    # Withings monthly exports are lists; flatten them.
+    data: list[dict[str, Any]] = []
+    for month in payloads:
+        if isinstance(month, list):
+            data.extend([d for d in month if isinstance(d, dict)])
     return data
 
-def load_btwb_workout_data(path_to_files: Path) -> dict:
-    import glob, json
-    files = glob.glob(str(path_to_files / 'year=????' / 'month=??.json'))
-    data = {k:v  for f in files for k,v in json.load(open(f)).items()}
+def load_btwb_workout_data(path_to_files: Union[str, Path]) -> dict[str, Any]:
+    payloads = _iter_month_json_objects(path_to_files)
+    # BTWB monthly exports are dicts keyed by day; merge them.
+    data: dict[str, Any] = {}
+    for month in payloads:
+        if isinstance(month, dict):
+            data.update(month)
     return data
 
 def _validate_data_frame(
