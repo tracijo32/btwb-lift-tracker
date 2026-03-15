@@ -1,7 +1,7 @@
 from pandas import DataFrame
 from pathlib import Path
 import re
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 
 _MONTH_JSON_SUFFIX_RE = re.compile(r"(?:^|/)year=\d{4}/month=\d{2}\.json$")
@@ -28,6 +28,35 @@ def _parse_gs_uri(uri: str) -> tuple[str, str]:
     return bucket, blob
 
 
+def _get_gcs_client(*, project: Optional[str] = None, credentials: Optional[Union[str, Path]] = None):
+    """
+    Returns a google.cloud.storage.Client if available.
+    If `credentials` is provided, it must be a service-account JSON path.
+    """
+    try:
+        from google.cloud import storage  # type: ignore
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "GCS support requires the optional dependency `google-cloud-storage`. "
+            "Install it (e.g. `pip install google-cloud-storage`) and ensure credentials are configured."
+        ) from e
+
+    if credentials is None:
+        return storage.Client(project=project)
+
+    cred_path = Path(credentials).expanduser().resolve()
+    try:
+        from google.oauth2 import service_account  # type: ignore
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "Service-account credentials require `google-auth` (usually installed with `google-cloud-storage`). "
+            "If needed: `pip install google-auth`."
+        ) from e
+
+    creds = service_account.Credentials.from_service_account_file(str(cred_path))
+    return storage.Client(project=project or getattr(creds, "project_id", None), credentials=creds)
+
+
 def _iter_month_json_objects(source: Union[str, Path]) -> list[Any]:
     """
     Loads and returns parsed JSON objects from:
@@ -41,16 +70,7 @@ def _iter_month_json_objects(source: Union[str, Path]) -> list[Any]:
     src = str(source)
     if _is_gs_uri(src):
         bucket_name, blob_or_prefix = _parse_gs_uri(src)
-        try:
-            from google.cloud import storage  # type: ignore
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(
-                "Reading from GCS requires the optional dependency `google-cloud-storage`. "
-                "Install it (e.g. `pip install google-cloud-storage`) and ensure "
-                "Application Default Credentials are configured."
-            ) from e
-
-        client = storage.Client()
+        client = _get_gcs_client()
 
         # If the URI points at a single JSON file, load just that object.
         if blob_or_prefix and blob_or_prefix.lower().endswith(".json") and not blob_or_prefix.endswith("/"):
@@ -105,6 +125,54 @@ def load_btwb_workout_data(path_to_files: Union[str, Path]) -> dict[str, Any]:
         if isinstance(month, dict):
             data.update(month)
     return data
+
+
+def save_plotly_figure(
+    fig: Any,
+    path: Union[str, Path],
+    *,
+    project: Optional[str] = None,
+    credentials: Optional[Union[str, Path]] = None,
+    cache_control: Optional[str] = "no-cache",
+) -> str:
+    """
+    Save a Plotly figure to either a local path or a GCS object path.
+
+    - If `path` starts with "gs://", uploads the HTML to that object.
+    - Otherwise writes the HTML locally.
+    """
+    import io
+
+    dst = str(path)
+    if _is_gs_uri(dst):
+        bucket_name, blob_name = _parse_gs_uri(dst)
+        if not blob_name or blob_name.endswith("/"):
+            raise ValueError(
+                f"GCS destination must include a filename (e.g. gs://bucket/path/file.html), got {dst!r}"
+            )
+
+        # Use Plotly's own serializer so output matches fig.write_html().
+        buf = io.StringIO()
+        fig.write_html(buf)
+        html = buf.getvalue()
+
+        client = _get_gcs_client(project=project, credentials=credentials)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name.lstrip("/"))
+        blob.upload_from_string(html, content_type="text/html")
+
+        if cache_control:
+            blob.cache_control = cache_control
+            blob.content_type = "text/html"
+            blob.patch()
+
+        return f"gs://{bucket_name}/{blob.name}"
+
+    p = Path(path).expanduser()
+    if p.parent and not p.parent.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(str(p))
+    return str(p)
 
 def _validate_data_frame(
     df: DataFrame,
