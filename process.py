@@ -11,7 +11,11 @@ from kalman import (
     forecast_strength_with_uncertainty
 )
 
-def process_withings_data(path_to_files: Path) -> pd.DataFrame:
+def process_withings_data(
+    path_to_files: Path,
+    horizon_days: int = 180,
+    lookback_days: int = 90
+    ) -> pd.DataFrame:
     data = load_withings_data(path_to_files)
 
     ## convert the data to a dataframe
@@ -27,29 +31,43 @@ def process_withings_data(path_to_files: Path) -> pd.DataFrame:
         aggfunc='mean'
     )
     pvt.columns.name = None
-
+    weight_types = list(pvt.columns)
     data_df = pvt.reset_index()
 
     ## smooth data and resample to daily
-    pvt = pvt.rolling(window='7D').mean()\
+    smoothed = pvt.rolling(window='7D').mean()\
         .resample('D').mean()\
             .interpolate("linear")\
-                .dropna()
+                .dropna()\
+                    .reset_index()
 
-    ## fit Holt-Winters exponential smoothing models to each column
-    ## forcast 180 days out in to the future
-    from statsmodels.tsa.holtwinters import ExponentialSmoothing
-    models = {}
-    for col in pvt.columns:
-        model = ExponentialSmoothing(pvt[col], trend="add", seasonal=None).fit()
-        df1 = model.fittedvalues.to_frame(name=col)
-        df2 = model.forecast(180).to_frame(name=col)
-        df = pd.concat([df1, df2]).sort_index()
-        df.index.name = 'date'
-        models[col] = df
+    date_max = smoothed['date'].max()
+    date_lookback = date_max - pd.Timedelta(days=lookback_days)
 
-    ## concatentate the models in to the same format as the raw data
-    model_df = pd.concat(models.values(), axis=1).reset_index()
+    train = smoothed[smoothed['date'].ge(date_lookback)]
+    train['t_days'] = (train['date'] - date_max).dt.days
+
+    X_pred = pd.DataFrame({'t_days': list(range(0, horizon_days))})
+
+    model_preds = pd.DataFrame(index=X_pred.index)
+    from sklearn.linear_model import LinearRegression
+    for wt in weight_types:
+        X = train[['t_days']]
+        y = train[wt]
+
+        model = LinearRegression()
+        model.fit(X, y)
+
+        y_pred = model.predict(X_pred)
+        model_preds[wt] = y_pred
+
+    model_preds = pd.merge(X_pred, model_preds, left_index=True, right_index=True)
+    model_preds['date'] = date_max + pd.to_timedelta(model_preds['t_days'], unit='D')
+    model_preds = model_preds.reindex(columns=smoothed.columns)
+
+    model_df = pd.concat([smoothed, model_preds])\
+        .sort_values(by='date')\
+            .reset_index(drop=True)
 
     return data_df, model_df
 

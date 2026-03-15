@@ -22,14 +22,15 @@ def reformat_withings(df: pd.DataFrame) -> pd.DataFrame:
                 }
             ).dropna()
     df['total'] = df[['bone','fat','muscle']].sum(axis=1)
+    df['% fat'] = df['fat'] / df['total'] * 100
     return df
 
-def get_withings_traces(
+def create_withings_traces(
     withings_data_frame: pd.DataFrame,
     withings_model_frame: pd.DataFrame,
     marker_color: str = COLORS.text,
-    model_line_color: str = COLORS.grid,
-    n_days_forecast: int = 30
+    line_color: str = COLORS.grid,
+    column_name: str = 'total'
 ) -> dict[str, go.Scatter]:
 
     """
@@ -57,69 +58,75 @@ def get_withings_traces(
 
     ## get the date range of the actual measurements    
     dt_min, dt_max = meas['date'].min(), meas['date'].max()
-    dt_max_forecast = dt_max + pd.Timedelta(days=n_days_forecast)
 
     ## get the model fit, which is the model values spanning the date range of the actual measurements
     model_fit = model[model['date'].between(dt_min, dt_max)]
-
-    ## get the model forecast, which is the model values for the date range beyond data
-    model_forecast = model[model['date'].between(dt_max, dt_max_forecast,inclusive='right')]
-
-    ## add the last day of the model fit to the model forecast for continuity
-    model_forecast = pd.concat([model_fit.iloc[-1:], model_forecast])
-    model_forecast = model_forecast.sort_values('date')
 
     traces = [
         ## withings total weight actual measurements
         go.Scatter(
             x=meas['date'], 
-            y=meas['total'], 
+            y=meas[column_name], 
             mode='markers', 
             name='measurements',
             marker=dict(color=marker_color),
-            showlegend=True
+            showlegend=False
         ),
         ## withings total weight Holt-Winters Exponential Smoothing model
         ## spanning the date range of the actual measurements
         go.Scatter(
             x=model_fit['date'], 
-            y=model_fit['total'], 
+            y=model_fit[column_name], 
             mode='lines', 
-            legendgroup='bodyweight',
-            legendgrouptitle=dict(text='body weight'),
-            name='model fit',
-            line=dict(color=model_line_color),
-            showlegend=True
-        ),
-        ## withings total weight Holt-Winters Exponential Smoothing model
-        ## forecasted values for the date range after the actual measurements
-        go.Scatter(
-            x=model_forecast['date'], 
-            y=model_forecast['total'], 
-            legendgroup='bodyweight',
-            legendgrouptitle=dict(text='body weight'),
-            mode='lines', 
-            name='model forecast',
-            line=dict(color=model_line_color,dash='dot'),
-            showlegend=True
-        ),
+            name='7 day rolling average',
+            line=dict(color=line_color),
+            showlegend=False
+        )
     ]
     return traces
 
-def create_withings_figure(
-    withings_data_frame: pd.DataFrame,
-    withings_model_frame: pd.DataFrame
+
+def create_body_weight_figure(
+    withings_data: pd.DataFrame,
+    withings_model: pd.DataFrame
 ) -> go.Figure:
-    withings_traces = get_withings_traces(
-        withings_data_frame,
-        withings_model_frame
+
+    traces = create_withings_traces(
+        withings_data,
+        withings_model,
+        column_name='total',
+        marker_color=COLORS.purple,
+        line_color=COLORS.purple
     )
-    fig = go.Figure(withings_traces)
+    fig = go.Figure(traces)
+
     fig.update_layout(
-        title='Weight',
+        title='Body weight',
         xaxis_title='Date',
-        yaxis_title='Weight (lbs)'
+        yaxis_title='Weight (lb)',
     )
+    return fig
+
+def create_body_composition_figure(
+    withings_data: pd.DataFrame,
+    withings_model: pd.DataFrame
+) -> go.Figure:
+
+    traces = create_withings_traces(
+        withings_data,
+        withings_model,
+        column_name='% fat',
+        marker_color=COLORS.sea_green,
+        line_color=COLORS.sea_green
+    )
+    fig = go.Figure(traces)
+
+    fig.update_layout(
+        title='Body Composition',
+        xaxis_title='Date',
+        yaxis_title='% body fat',
+    )
+
     return fig
 
 ### squats #####################
@@ -405,7 +412,7 @@ def get_body_weight_back_squat_prediction(
     weight_met = instance_met[['weight_squat', 'weight_body']].mean()
     return date_met, weight_met
 
-def create_bwbs_forecast_figure(
+def create_bwbs_tracker_figure(
     withings_data_frame: pd.DataFrame,
     squat_data_frame: pd.DataFrame,
     withings_model_frame: pd.DataFrame,
@@ -437,28 +444,28 @@ def create_bwbs_forecast_figure(
             x=combined_weights_past['date'],
             y=combined_weights_past['weight_body'],
             mode='lines',
-            line=dict(color=COLORS.dark_blue),
-            name='body weight (K-H ES fit)',
+            line=dict(color=COLORS.blue),
+            name='body weight (7 day rolling average)',
         ),
         go.Scatter(
             x=combined_weights_past['date'],
             y=combined_weights_past['weight_squat'],
             mode='lines',
-            line=dict(color=COLORS.green),
+            line=dict(color=COLORS.orange),
             name='back squat (Kalman filter)',
         ),
             go.Scatter(
             x=combined_weights_future['date'],
             y=combined_weights_future['weight_body'],
             mode='lines',
-            line=dict(color=COLORS.dark_blue, dash='dash'),
+            line=dict(color=COLORS.blue, dash='dash'),
             name='body weight (forecast)',
         ),
         go.Scatter(
             x=combined_weights_future['date'],
             y=combined_weights_future['weight_squat'],
             mode='lines',
-            line=dict(color=COLORS.green, dash='dash'),
+            line=dict(color=COLORS.orange, dash='dash'),
             name='back squat (forecast)',
         )
     ]
@@ -487,7 +494,7 @@ def create_bwbs_forecast_figure(
                 y=[goal_weight],
                 mode='markers',
                 marker=dict(
-                    color=COLORS.brown,
+                    color=COLORS.green,
                     symbol='star',
                     size=30
                 ),
@@ -506,7 +513,7 @@ def create_bwbs_forecast_figure(
             standoff=15,
             arrowhead=2,
             arrowwidth=2,
-            arrowcolor=COLORS.brown,
+            arrowcolor=COLORS.green,
         )
     else:
         ## if the goal is not reached, then place an annotation
@@ -523,7 +530,31 @@ def create_bwbs_forecast_figure(
             'is not predicted to be reached',
             f'before {last_model_date.month_name()} {last_model_date.year}.'
         ])
-        fig.add_annotation(x=x,y=y,text=text,showarrow=False)     
+        fig.add_annotation(x=x,y=y,text=text,showarrow=False)  
+
+    ## add true 1RM back squat data points to the figure
+    min_date = combined_weights['date'].min()
+    bs_1rm = squat_data_frame[
+        squat_data_frame['date'].ge(min_date) & 
+        squat_data_frame['squat'].eq('back') &
+        squat_data_frame['variation'].eq('normal') &
+        squat_data_frame['repetitions'].eq(1)
+    ].rename(columns={'weight_lbs':'weight'})
+
+    fig.add_trace(
+        go.Scatter(
+            x=bs_1rm['date'],
+            y=bs_1rm['weight'],
+            mode='markers',
+            marker=dict(
+                color=COLORS.orange,
+                symbol='diamond',
+                size=15
+            ),
+            name='actual back squat 1RM',
+            showlegend=False
+        )
+    )
 
     ## update all of the layout elements
     fig.update_layout(
@@ -551,7 +582,7 @@ if __name__ == '__main__':
     from plotly_theme import register_chunk_template
     _ = register_chunk_template(transparent=True, set_default=True)
 
-    create_bwbs_forecast_figure(withings_model, squat_model)\
+    create_bwbs_tracker_figure(withings_model, squat_model)\
         .write_html('bwbs_forecast.html')
 
     create_squat_strength_figure(squat_data, squat_model)\
